@@ -56,7 +56,7 @@ const config = {
         style: 'dark',
         copyright: `Personal study notes · original text and diagrams · chapter structure follows Kleppmann's <em>Designing Data-Intensive Applications</em> (O'Reilly, 2017)`,
       },
-      prism: {theme: prismThemes.github, darkTheme: prismThemes.dracula, additionalLanguages: ['sql', 'json', 'protobuf']},
+      prism: {theme: prismThemes.github, darkTheme: prismThemes.dracula, additionalLanguages: ['sql', 'json', 'protobuf', 'prolog', 'bash']},
     }),
 };
 
