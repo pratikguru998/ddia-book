@@ -1,0 +1,216 @@
+---
+title: 12 · The future of data systems
+sidebar_label: 12 · The future of data systems
+slug: /chapters/part-3/future
+sidebar_position: 3
+---
+
+# 12 · The future of data systems
+
+> **In one line:** no single tool does everything, so compose specialised systems around an **ordered event log** and **derived views**. Build correctness end to end, and keep ethics in mind as you design.
+
+<BookRef pages="511–573" section="Chapter 12" />
+
+## 12.1 Data integration
+
+<BookRef pages="512–521" section="Data Integration" />
+
+The right tool depends on the use case, so real systems combine several. The hard part is keeping them **consistent with each other**.
+
+```mermaid
+flowchart LR
+  W["✍️ writes"] --> LOG[["📜 one totally ordered<br/>event log (system of record)"]]
+  LOG --> DB[("OLTP DB")]
+  LOG --> SI[("Search index")]
+  LOG --> CA[("Cache")]
+  LOG --> DW[("Warehouse")]
+  LOG --> ML[("ML features")]
+```
+
+**Derived data vs distributed transactions:**
+
+| | Distributed transactions (2PC) | Log-based derived data |
+|---|---|---|
+| Ordering | Locks | The log's order |
+| Atomicity | Atomic commit | Deterministic retries + idempotence |
+| Consistency | Linearizable reads | Usually async: read-your-writes is not guaranteed by default |
+| Fault behaviour | Amplifies failures | Isolates them: a broken consumer just lags |
+
+**Limits of total ordering:**
+- one leader per log means throughput is capped (partition it, and you lose cross-partition order)
+- multiple datacenters each need a leader
+- microservices have no shared log
+- offline clients
+
+**Batch and stream together** (lambda vs kappa):
+
+```mermaid
+flowchart TB
+  subgraph LAMBDA["Lambda architecture"]
+    direction LR
+    IN1["events"] --> B1["batch layer<br/>(accurate, slow)"]
+    IN1 --> S1["speed layer<br/>(approximate, fast)"]
+    B1 & S1 --> Q1["merge at query time"]
+  end
+  subgraph KAPPA["Unified / kappa style"]
+    direction LR
+    IN2["events (replayable log)"] --> S2["one engine: stream + replay history for reprocessing"]
+    S2 --> V2["view v1"]
+    S2 --> V3["view v2 (built side by side, then switch)"]
+  end
+```
+
+**Reprocessing for schema evolution:** build the new view next to the old one from the full history, shift readers over gradually, and you can always roll back. It's like a railway changing gauge by laying a third rail.
+
+## 12.2 Unbundling databases
+
+<BookRef pages="521–537" section="Unbundling Databases" />
+
+A database internally already contains secondary indexes, materialised views, replication logs and triggers. **"Unbundling"** means building those same features **across** systems, with the event log as the glue.
+
+```mermaid
+flowchart LR
+  subgraph INSIDE["Inside one database"]
+    T["table"] -->|"internal"| IX["index"]
+    T -->|"internal"| MV["materialised view"]
+  end
+  subgraph OUTSIDE["Unbundled across systems"]
+    T2[("DB")] -->|"CDC log"| IX2[("search engine")]
+    T2 -->|"CDC log"| MV2[("cache / view")]
+  end
+  INSIDE -.->|"same idea, bigger scale"| OUTSIDE
+```
+
+- **Federated databases (unify reads):** one query interface over many stores.
+- **Unbundled databases (unify writes):** the log keeps all stores in sync. Asynchronous, loosely coupled, and each team owns its own piece.
+
+### Application code as a derivation function
+
+```mermaid
+flowchart LR
+  E[["📜 input events"]] --> F["⚙️ app code<br/>= derivation function<br/>(stateless, deployable)"]
+  ST[("state, e.g. exchange rates,<br/>subscribed as a stream")] --> F
+  F --> O[["📜 output events / views"]]
+```
+
+- Separate **application code** (stateless, deployable) from **state** (durable, in the DB). The DB acts like a spreadsheet: change an input and dependent cells update.
+- Stream processors **subscribe** to state changes instead of making request/response lookups. Example: keep a local copy of exchange rates updated through a stream, instead of calling a rates service for every purchase.
+
+### Observing derived state: the write path and read path
+
+```mermaid
+flowchart LR
+  W["✍️ write"] -->|"write path:<br/>precomputed eagerly"| IDX[("🗂️ derived view / index / cache")]
+  IDX -->|"read path:<br/>computed lazily on request"| R["📖 read"]
+```
+
+- Moving work to the write path (precompute more) makes reads cheaper, and vice versa. Indexes, caches and materialised views all **shift the boundary**.
+- **Push state to clients:** a browser or app is like an offline replica. Push changes to it over WebSockets or server-sent events (as React/Redux-style clients already model state as a stream of events).
+- **Reads are events too:** logging read requests into the stream lets you join reads with writes (causal tracking, audit).
+
+## 12.3 Aiming for correctness
+
+<BookRef pages="537–555" section="Aiming for Correctness" />
+
+### The end-to-end argument
+
+Low-level guarantees (TCP dedup, DB transactions) **aren't enough** on their own. For example, a user double-clicks "Pay", and TCP sees two separate connections.
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant API as API
+  participant DB as Database
+  U->>API: POST /transfer (request_id = 7f3a…)
+  API->>DB: INSERT request_id 7f3a (unique) + debit + credit in one txn
+  DB-->>API: ok
+  U->>API: retry POST /transfer (same request_id 7f3a)
+  API->>DB: INSERT request_id 7f3a
+  DB-->>API: ❌ unique violation → already done
+  API-->>U: return the original result ✅ no double charge
+```
+
+Generate a **unique request ID on the client**, pass it **end to end**, and enforce **idempotence** in the database.
+
+### Enforcing constraints with a log
+
+Uniqueness without distributed transactions: **partition the log by the constrained value**.
+
+```mermaid
+flowchart LR
+  R1["claim 'ana'"] -->|"hash('ana') → partition 3"| P3[["log partition 3"]]
+  R2["claim 'ana' (concurrent)"] -->|"same partition"| P3
+  P3 --> PROC["single-threaded processor:<br/>first claim wins, second rejected"]
+  PROC --> OUT[["result stream → client"]]
+```
+
+**Multi-partition operations** (e.g. a money transfer):
+1. log the **request** with a unique ID
+2. a processor emits a debit event to partition A and a credit event to partition B, both carrying the request ID
+3. downstream consumers **deduplicate by request ID**
+
+This gives atomic, exactly-once results **without** 2PC.
+
+### Timeliness vs integrity
+
+```mermaid
+flowchart LR
+  T["⏱️ Timeliness<br/>users see an up-to-date state<br/>(violations are temporary: wait and it converges)"]
+  I["🛡️ Integrity<br/>no corruption, no lost or duplicate data<br/>(violations are permanent)"]
+  I -->|"far more important"| NOTE["e.g. a card statement can lag a day (timeliness),<br/>but must never double-charge (integrity)"]
+```
+
+- Event-driven dataflow systems keep **integrity** without coordination: deterministic derivation, idempotent consumers and end-to-end request IDs.
+- Many businesses accept **temporarily** broken constraints and apologise afterwards (overbooked flights, oversold stock). Coordination is only needed where an apology costs too much.
+- **Coordination-avoiding** systems give better performance and availability.
+
+### Trust, but verify
+
+- Hardware and software do corrupt data (bit flips, buggy DBs).
+- **Audit:** periodically read your backups and check integrity end to end. Event logs make auditing much easier.
+- Cryptographic tools such as Merkle trees and certificate-transparency-style logs prove data hasn't been tampered with.
+
+## 12.4 Doing the right thing
+
+<BookRef pages="555–565" section="Doing the Right Thing" />
+
+Data is about **people**. Engineers are responsible for the consequences of the systems they build.
+
+```mermaid
+mindmap
+  root((Ethics of data systems))
+    Predictive analytics
+      Algorithmic prison: wrongly denied loans or jobs
+      Bias in, bias out
+      Who is accountable?
+      Feedback loops
+    Privacy & tracking
+      Surveillance by default
+      Consent you can't refuse
+      Data is a liability, not just an asset
+    Responsibility
+      Purge data you don't need
+      Respect user agency
+      Regulation and self-regulation
+```
+
+- Replace the word **"data"** with **"surveillance"** and see whether your design still sounds acceptable.
+- **Data minimisation:** don't keep data forever "just in case".
+- Systems that make decisions about people must allow **appeal and explanation**.
+
+## Summary
+
+<KeyIdea>Design systems as **dataflow**: an immutable, ordered log of facts → deterministic derivation functions → many read-optimised views. Enforce correctness end to end with idempotence, prefer integrity over timeliness, audit everything, and remember there are humans on the other side.</KeyIdea>
+
+## 🧠 Check yourself
+
+<Quiz question="A user double-clicks 'Pay'. What prevents a double charge end to end?" options={["TCP sequence numbers", "Serializable isolation alone", "A client-generated request ID, enforced unique in the database", "Bigger timeouts"]} answer={2} explain="Lower layers see two independent requests. Only an end-to-end ID can deduplicate them." />
+
+<Quiz question="Which is usually more important: timeliness or integrity?" options={["Timeliness", "Integrity", "Equal", "Neither"]} answer={1} explain="A delayed update is fixable by waiting. Corrupted or duplicated data may be permanent." />
+
+<Quiz question="How can a log enforce unique usernames without distributed transactions?" options={["Use 2PC", "Partition the log by username and process each partition sequentially", "Use LWW", "Use a cache"]} answer={1} explain="All claims for the same name go to one partition, so a single-threaded processor decides the first one deterministically." />
+
+**Interview prompts**
+- Design a payments ledger using event sourcing. How do you guarantee no double spending?
+- How would you migrate a search index to a new schema with zero downtime?
+- What data would you choose *not* to collect in your design, and why?

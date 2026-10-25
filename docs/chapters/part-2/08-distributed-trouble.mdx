@@ -1,0 +1,244 @@
+---
+title: 8 · The trouble with distributed systems
+sidebar_label: 8 · Trouble with distributed systems
+slug: /chapters/part-2/distributed-trouble
+sidebar_position: 4
+---
+
+# 8 · The trouble with distributed systems
+
+> **In one line:** on one computer, things either work or crash. Across a network, **partial failures** happen: some parts are broken in unpredictable ways, messages vanish, clocks drift and processes freeze. You must design for all of it.
+
+<BookRef pages="295–341" section="Chapter 8" />
+
+## 8.1 Partial failures
+
+<BookRef pages="296–299" section="Faults and Partial Failures" />
+
+| | Single computer | Distributed system |
+|---|---|---|
+| Behaviour | Deterministic: works or crashes (kernel panic) | **Non-deterministic partial failures** |
+| Philosophy | Better to crash than return a wrong answer | Must keep going while some parts fail |
+| Analogy | Supercomputer (checkpoint, restart everything) | Cloud services (always online, rolling upgrades) |
+
+<KeyIdea>Build a **reliable system from unreliable parts**, just as TCP builds reliable delivery on top of unreliable IP, and error-correcting codes protect noisy channels.</KeyIdea>
+
+## 8.2 Unreliable networks
+
+<BookRef pages="299–309" section="Unreliable Networks" />
+
+Shared-nothing nodes talk through an **asynchronous packet network**, which promises nothing about whether or when a message arrives.
+
+```mermaid
+flowchart LR
+  C["client"] -->|"request"| N{{"🌐 network"}}
+  N -->|"① lost"| X1["🗑️"]
+  N -->|"② queued, arrives late"| S["server"]
+  N --> S2["③ server crashed / paused"]
+  S -->|"④ response lost or delayed"| N2{{"🌐"}} --> C
+```
+
+From the client's side, **all of these look the same**: no response. You can't tell *why*.
+
+### Timeouts: the only real failure detector
+
+- **Too short:** you declare live nodes dead. Their work gets done twice, and you may trigger cascading failovers under load.
+- **Too long:** users wait while a node really is dead.
+
+**Why network delays vary so much: queueing everywhere.**
+
+```mermaid
+flowchart LR
+  A["sender"] --> Q1["📥 OS send queue"] --> Q2["🔀 switch port queue<br/>(congestion)"] --> Q3["🖥️ receiver: CPU busy,<br/>OS queue"] --> Q4["☁️ VM paused by hypervisor"] --> B["app"]
+  A -. "TCP congestion control<br/>and retransmits add more delay" .-> B
+```
+
+Practical approach: measure round-trip times continuously and **adapt timeouts** to the observed distribution (as Cassandra's phi accrual failure detector does).
+
+### Why not just guarantee latency?
+
+| | Telephone network (circuit) | Internet / datacenter (packet) |
+|---|---|---|
+| Bandwidth | Reserved per call | Shared, used dynamically |
+| Delay | Bounded, fixed | **Unbounded** |
+| Why | Constant bit-rate audio | Bursty traffic, so sharing gives far better utilisation |
+
+Unbounded delay is a **cost/utilisation trade-off**, not a law of nature.
+
+## 8.3 Unreliable clocks
+
+<BookRef pages="309–322" section="Unreliable Clocks" />
+
+### Two kinds of clock
+
+| | Time-of-day clock | Monotonic clock |
+|---|---|---|
+| API | `clock_gettime(CLOCK_REALTIME)`, `System.currentTimeMillis()` | `CLOCK_MONOTONIC`, `System.nanoTime()` |
+| Meaning | Wall time since the epoch | Arbitrary start point, always moves forward |
+| Synced by NTP? | Yes, **can jump backwards** | Only its rate is adjusted (slewed) |
+| Use for | Timestamps humans read | **Measuring durations / timeouts** |
+| Compare across machines? | Roughly, with an error margin | ❌ Meaningless |
+
+Quartz drift (~200 ppm ≈ 17 s per day), NTP problems, firewalled NTP, leap seconds and VM pauses all make time-of-day clocks lie.
+
+### Danger: ordering events by timestamp (LWW)
+
+```mermaid
+sequenceDiagram
+  participant A as Node 1 (clock fast +3ms)
+  participant B as Node 2 (clock correct)
+  participant C as Node 3
+  A->>C: set x=1 @ t=42.004
+  B->>C: set x=2 @ t=42.003 (really happened LATER)
+  Note over C: LWW keeps x=1 ❌ causally newer write is dropped
+```
+
+**Logical clocks** (counters, version vectors) are the safe way to order events.
+
+### Clock readings have a confidence interval
+
+A timestamp is really `[earliest, latest]`. Google **Spanner's TrueTime** exposes this interval explicitly. To commit, Spanner **waits out the uncertainty** (~7 ms, using GPS and atomic clocks), so the intervals of causally ordered transactions don't overlap.
+
+```mermaid
+flowchart LR
+  subgraph TA["Txn A interval"]
+    a1["earliest_A"] --- a2["latest_A"]
+  end
+  subgraph TB["Txn B interval"]
+    b1["earliest_B"] --- b2["latest_B"]
+  end
+  a2 -->|"no overlap → A definitely before B"| b1
+```
+
+### Process pauses
+
+A thread can be stopped at **any** point, for an unbounded time:
+- stop-the-world **garbage collection** (seconds)
+- VM suspended or live-migrated
+- laptop lid closed
+- OS context switch, swapping to disk (thrashing)
+- `SIGSTOP`, or a slow synchronous disk on network storage
+
+**The classic bug: a lease that expired while you were paused.**
+
+```mermaid
+sequenceDiagram
+  participant C1 as Client 1
+  participant LS as Lock service
+  participant ST as Storage
+  participant C2 as Client 2
+  C1->>LS: get lease
+  LS-->>C1: ok (10 s)
+  Note over C1: ⏸️ GC pause 15 s...
+  Note over LS: lease expires
+  C2->>LS: get lease
+  LS-->>C2: ok
+  C2->>ST: write
+  Note over C1: ▶️ resumes, thinks it still holds the lease
+  C1->>ST: write ❌ corrupts data
+```
+
+**Real-time guarantees** (hard deadlines) exist in embedded systems, but they're expensive and limit which languages and tools you can use. Most servers instead **limit the impact of pauses**, for example by restarting processes before GC pauses get long or treating a pause as a short planned outage.
+
+## 8.4 Knowledge, truth and lies
+
+<BookRef pages="322–332" section="Knowledge, Truth, and Lies" />
+
+A node can't trust its own view of the situation. **The truth is defined by the majority (a quorum).**
+
+```mermaid
+flowchart LR
+  N1["node 1:<br/>'I'm the leader!'"] -.->|"can't reach anyone"| X["❌"]
+  N2["node 2"] --- N3["node 3"] --- N4["node 4"]
+  N2 & N3 & N4 --> V["majority vote:<br/>node 1 is dead → elect a new leader"]
+```
+
+Even if node 1 is alive, it **must accept** the majority's decision.
+
+### Fencing tokens: fixing the stale-lease bug
+
+Every time the lock service grants a lease, it hands out a **monotonically increasing token**. Storage rejects writes with an older token than it has already seen.
+
+```mermaid
+sequenceDiagram
+  participant C1 as Client 1
+  participant LS as Lock service
+  participant ST as Storage
+  participant C2 as Client 2
+  C1->>LS: get lease
+  LS-->>C1: ok, token 33
+  Note over C1: ⏸️ long pause
+  C2->>LS: get lease
+  LS-->>C2: ok, token 34
+  C2->>ST: write (token 34)
+  ST-->>C2: ✅ highest seen = 34
+  C1->>ST: write (token 33)
+  ST-->>C1: ❌ rejected: 33 < 34
+```
+
+In ZooKeeper, `zxid` or `cversion` can serve as the token.
+
+### Byzantine faults
+
+A **Byzantine** node may *lie*: send corrupted or malicious messages. Byzantine fault tolerance (needed in aerospace and blockchains) requires more than two-thirds of nodes to be honest, and it's expensive. In a datacenter you control, we usually assume **no Byzantine faults**, but still add cheap protection:
+- checksums against corrupted packets
+- input validation and sanitisation
+- multiple NTP servers, ignoring outliers
+
+### System models: what we assume
+
+```mermaid
+flowchart TB
+  subgraph TIMING["⏱️ Timing assumptions"]
+    S1["Synchronous<br/>bounded delay, pauses, drift<br/>(unrealistic)"]
+    S2["✅ Partially synchronous<br/>usually bounded, sometimes not<br/>(realistic)"]
+    S3["Asynchronous<br/>no timing assumptions at all"]
+  end
+  subgraph FAIL["💥 Node-failure assumptions"]
+    F1["Crash-stop"]
+    F2["✅ Crash-recovery<br/>(stable storage survives)"]
+    F3["Byzantine"]
+  end
+```
+
+Correctness properties of an algorithm:
+- **Safety:** nothing bad ever happens (e.g. tokens are unique). A violation can be pointed to at a specific moment and can't be undone.
+- **Liveness:** something good eventually happens (e.g. a request eventually gets a response). It's often conditional ("if a majority is up").
+
+<KeyIdea>Safety must **always** hold, even if every node crashes or the network misbehaves. Liveness is allowed to depend on conditions.</KeyIdea>
+
+## Summary
+
+```mermaid
+mindmap
+  root((What goes wrong))
+    🌐 Network
+      Lost or delayed packets
+      Can't tell slow from dead
+      Timeouts are guesses
+    ⏰ Clocks
+      Drift, NTP jumps
+      LWW loses data
+      Use monotonic or logical clocks
+    ⏸️ Process pauses
+      GC, VM, swapping
+      Expired leases
+      Fencing tokens
+    🗳️ Truth
+      Majority quorum decides
+      Byzantine is usually out of scope
+      System models, safety vs liveness
+```
+
+## 🧠 Check yourself
+
+<Quiz question="Which clock should you use to measure a request timeout?" options={["Time-of-day clock", "Monotonic clock", "NTP server time", "Lamport clock"]} answer={1} explain="Monotonic clocks never jump backwards, so durations measured with them are reliable." />
+
+<Quiz question="A node was paused for 20 s by GC, then wrote to storage believing it still held a lock. What prevents corruption?" options={["Longer lease timeouts", "Fencing tokens checked by the storage", "NTP synchronisation", "Byzantine fault tolerance"]} answer={1} explain="Storage rejects writes carrying an older token than one it has already seen." />
+
+<Quiz question="'A request eventually receives a response' is a…" options={["Safety property", "Liveness property", "Byzantine property", "Timing assumption"]} answer={1} explain="Liveness means something good eventually happens. Safety means nothing bad ever happens." />
+
+**Interview prompts**
+- Why do distributed locks need fencing tokens?
+- How would you choose a failure-detection timeout?
+- Why is last-write-wins with wall-clock timestamps dangerous?

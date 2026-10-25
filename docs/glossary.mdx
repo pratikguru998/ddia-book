@@ -1,0 +1,78 @@
+---
+title: Glossary
+sidebar_label: 🔤 Glossary
+slug: /glossary
+sidebar_position: 91
+---
+
+# 🔤 Glossary
+
+Short definitions in plain language. The number in brackets is the chapter where the term is explained.
+
+| Term | Meaning |
+|---|---|
+| **ACID** | Atomicity, consistency, isolation, durability: the safety guarantees of transactions (7) |
+| **Anti-entropy** | Background process that compares replicas and copies missing data (5) |
+| **Atomic commit** | All nodes in a distributed transaction commit, or all abort (9) |
+| **Backpressure** | Slowing a producer down when consumers can't keep up (11) |
+| **Backward compatibility** | New code can read data written by old code (4) |
+| **Bloom filter** | Compact structure that tells you a key is *definitely not* present (3) |
+| **B-tree** | Page-based, update-in-place sorted index; the standard in relational DBs (3) |
+| **Byzantine fault** | A node that sends wrong or malicious messages (8) |
+| **CAP theorem** | During a network partition, choose linearizability or availability (9) |
+| **Causality** | The happens-before relationship between events (5, 9) |
+| **CDC (change data capture)** | Turning a database's change log into a stream for other systems (11) |
+| **Column-oriented storage** | Storing each column separately; great for analytics scans (3) |
+| **Compaction** | Removing overwritten or deleted values from log segments (3, 11) |
+| **Consensus** | Getting nodes to agree on one value despite faults (9) |
+| **Consistent prefix reads** | Readers see writes in an order that makes causal sense (5) |
+| **CQRS** | Separate write model (events) from read models (views) (11) |
+| **CRDT** | Data type whose concurrent edits merge automatically (5) |
+| **Derived data** | Data computed from a system of record: caches, indexes, views (10) |
+| **Dirty read / write** | Seeing / overwriting another transaction's uncommitted data (7) |
+| **Event sourcing** | Storing state as an immutable log of domain events (11) |
+| **Event time vs processing time** | When something happened vs when the system processed it (11) |
+| **Eventual consistency** | Replicas converge if writes stop, with no bound on when (5) |
+| **Exactly-once (effectively-once)** | Result is as if each message were processed once, even with retries (11) |
+| **Failover** | Promoting a follower to leader after the leader fails (5) |
+| **Fencing token** | Increasing number that lets storage reject writes from stale lock holders (8) |
+| **Forward compatibility** | Old code can read data written by new code (4) |
+| **Hinted handoff** | Temporarily storing writes for an unreachable node, delivering them later (5) |
+| **Hot spot / skew** | One partition or key receiving disproportionate load (6) |
+| **Idempotent** | Doing it twice has the same effect as doing it once (8, 11, 12) |
+| **Lamport timestamp** | (counter, nodeID) logical clock giving a total order consistent with causality (9) |
+| **Leader / follower** | One replica accepts writes; others copy its log (5) |
+| **Linearizability** | System behaves as if there's one copy with atomic operations; reads always see the latest value (9) |
+| **Log-based broker** | Message broker that keeps an append-only, partitioned log (Kafka) (11) |
+| **LSM-tree** | Log-structured merge tree: memtable + sorted immutable files + compaction (3) |
+| **LWW (last write wins)** | Conflict resolution by timestamp; can silently lose data (5, 8) |
+| **MapReduce** | Batch model: map → shuffle (partition + sort) → reduce (10) |
+| **Materialised view** | Precomputed query results kept up to date (3, 11) |
+| **Monotonic clock** | Clock that only moves forward; use it for measuring durations (8) |
+| **Monotonic reads** | A user never sees older data after having seen newer data (5) |
+| **MVCC** | Multi-version concurrency control: keep several versions of a row for snapshots (7) |
+| **OLTP / OLAP** | Transaction processing vs analytics workloads (3) |
+| **Partition (shard)** | A subset of the data stored on one node (6) |
+| **Phantom** | A write that changes the result of another transaction's search query (7) |
+| **Quorum** | Minimum number of nodes that must respond for an operation (w, r with w + r > n) (5, 9) |
+| **Read repair** | Fixing a stale replica when a read notices it (5) |
+| **Read skew** | Seeing parts of the database at different points in time (7) |
+| **Rebalancing** | Moving partitions between nodes (6) |
+| **Replication lag** | How far behind the leader a follower is (5) |
+| **Schema-on-read / on-write** | Structure checked when reading vs enforced when writing (2) |
+| **Serializability** | Transactions behave as if run one at a time (7) |
+| **Snapshot isolation** | Each transaction reads a consistent snapshot of committed data (7) |
+| **Split brain** | Two nodes both acting as leader (5, 8) |
+| **SSI** | Serializable snapshot isolation: optimistic serializability that aborts on conflicts (7) |
+| **SSTable** | Sorted String Table: an immutable file sorted by key (3) |
+| **Star schema** | Fact table surrounded by dimension tables (3) |
+| **System of record** | The source of truth; everything else is derived from it (10) |
+| **Tombstone** | Marker that records a deletion (3, 5, 11) |
+| **Total order broadcast** | Every node receives the same messages in the same order (9) |
+| **Two-phase commit (2PC)** | Prepare + commit protocol for atomic commit; blocks if the coordinator dies (9) |
+| **Two-phase locking (2PL)** | Shared/exclusive locks held until commit for serializability (7) |
+| **Version vector** | One counter per replica, used to detect concurrent writes (5) |
+| **WAL (write-ahead log)** | Append-only log written before modifying data, for crash recovery (3) |
+| **Window (tumbling, hopping, sliding, session)** | Ways of grouping stream events by time (11) |
+| **Write amplification** | One logical write causing several physical disk writes (3) |
+| **Write skew** | Two transactions read the same data and update different rows, breaking an invariant (7) |
